@@ -24,7 +24,6 @@ from frappe_manager.logger import log
 from frappe_manager.services_manager.services import ServicesManager
 from frappe_manager.migration_manager.migration_executor import MigrationExecutor
 from frappe_manager.site_manager.site import Bench
-from frappe_manager.site_manager.workers_manager.SiteWorker import BenchWorkers
 from frappe_manager.ssl_manager import LETSENCRYPT_PREFERRED_CHALLENGE, SUPPORTED_SSL_TYPES
 from frappe_manager.ssl_manager.certificate import SSLCertificate
 from frappe_manager.ssl_manager.letsencrypt_certificate import LetsencryptSSLCertificate
@@ -75,7 +74,7 @@ def app_callback(
     if not help_called:
         first_time_install = False
 
-        richprint.start(f"Working")
+        richprint.start("Working")
 
         if not CLI_DIR.exists():
             # creating the sites dir
@@ -105,16 +104,16 @@ def app_callback(
 
         fm_config_manager: FMConfigManager = FMConfigManager.import_from_toml()
 
-
         # docker pull
         if first_time_install:
             if not fm_config_manager.root_path.exists():
                 richprint.print("It seems like the first installation. Pulling docker images...️", "🔍")
 
                 completed_status = pull_docker_images()
+
                 if not completed_status:
                     shutil.rmtree(CLI_DIR)
-                    richprint.exit("Aborting. [bold][blue]fm[/blue][/bold] will not be able to work without images. 🖼️")
+                    richprint.exit("Aborting. Not able to pull all required Docker images.")
 
                 current_version = Version(get_current_fm_version())
                 fm_config_manager.version = current_version
@@ -157,7 +156,7 @@ def create(
         ),
     ] = [],
     environment: Annotated[
-        FMBenchEnvType, typer.Option("--environment", "--env", help="Select bench environment type.")
+        FMBenchEnvType, typer.Option("--environment", "-e", help="Select bench environment type.")
     ] = FMBenchEnvType.dev,
     letsencrypt_preferred_challenge: Annotated[
         Optional[LETSENCRYPT_PREFERRED_CHALLENGE],
@@ -176,9 +175,7 @@ def create(
     template: Annotated[bool, typer.Option(help="Create template bench.")] = False,
     admin_pass: Annotated[
         str,
-        typer.Option(
-            help="Default Password for the standard 'Administrator' User. This will be used as the password for the Administrator User for all new bench."
-        ),
+        typer.Option(help="Password for the 'Administrator' User."),
     ] = "admin",
     ssl: Annotated[
         SUPPORTED_SSL_TYPES, typer.Option(help="Enable https", show_default=True)
@@ -187,22 +184,6 @@ def create(
     # TODO Create markdown table for the below help
     """
     Create a new bench.
-
-    Frappe\[version-15] will be installed by default.
-
-    [bold white on black]Examples:[/bold white on black]
-
-    [bold]# Install frappe\[version-15][/bold]
-    $ [blue]fm create example[/blue]
-
-    [bold]# Install frappe\[develop][/bold]
-    $ [blue]fm create example --frappe-branch develop[/blue]
-
-    [bold]# Install frappe\[version-15], erpnext\[version-15] and hrms\[version-15][/bold]
-    $ [blue]fm create example --apps erpnext:version-15 --apps hrms:version-15[/blue]
-
-    [bold]# Install frappe\[version-15], erpnext\[version-14] and hrms\[version-14][/bold]
-    $ [blue]fm create example --frappe-branch version-14 --apps erpnext:version-14 --apps hrms:version-14[/blue]
     """
 
     services_manager: ServicesManager = ctx.obj["services"]
@@ -263,19 +244,16 @@ def create(
         admin_tools=True if environment == FMBenchEnvType.dev else False,
         admin_pass=admin_pass,
         # TODO get this info from services, maybe ?
-        mariadb_host=services_manager.database_manager.database_server_info.host,
-        mariadb_root_pass='/run/secrets/db_root_password',
         environment_type=environment,
         root_path=bench_config_path,
         ssl=ssl_certificate,
     )
 
     compose_path = bench_path / 'docker-compose.yml'
-    bench_workers = BenchWorkers(benchname, bench_path)
     compose_file_manager = ComposeFile(compose_path)
     compose_project = ComposeProject(compose_file_manager, verbose)
 
-    bench: Bench = Bench(bench_path, benchname, bench_config, compose_project, bench_workers, services_manager)
+    bench: Bench = Bench(bench_path, benchname, bench_config, compose_project, services_manager)
     benches.add_bench(bench)
     benches.create_benches(is_template_bench=template)
 
@@ -303,7 +281,6 @@ def delete(
         bench_compose_path = bench_path / 'docker-compose.yml'
         compose_file_manager = ComposeFile(bench_compose_path)
         bench_compose_project = ComposeProject(compose_file_manager)
-        bench_workers = BenchWorkers(benchname, bench_path)
 
         bench_config_path = bench_path / CLI_BENCH_CONFIG_FILE_NAME
         # try using bench object if not then create bench
@@ -323,24 +300,22 @@ def delete(
                 # TODO do something about this forcefully delete maybe
                 admin_tools=False,
                 admin_pass='pass',
-                mariadb_host='global-db',
-                mariadb_root_pass="/run/secrets/db_root_password",
                 environment_type=FMBenchEnvType.dev,
                 ssl=SSLCertificate(domain=benchname, ssl_type=SUPPORTED_SSL_TYPES.none),
                 root_path=bench_config_path,
             )
+
             bench = Bench(
                 bench_path,
                 benchname,
                 fake_config,
                 bench_compose_project,
-                bench_workers,
                 services=services_manager,
                 workers_check=False,
             )
 
         else:
-            bench = Bench.get_object(benchname, services_manager, workers_check=False, admin_tools_check=False)
+            bench = Bench.get_object(benchname, services=services_manager, workers_check=False, admin_tools_check=False)
 
         benches.add_bench(bench)
         benches.remove_benches()
@@ -522,7 +497,7 @@ def update(
     ] = None,
     environment: Annotated[
         Optional[FMBenchEnvType],
-        typer.Option("--environment", "--env", help="Switch bench environment.", show_default=False),
+        typer.Option("--environment", "-e", help="Switch bench environment.", show_default=False),
     ] = None,
     developer_mode: Annotated[
         Optional[EnableDisableOptionsEnum],
@@ -545,12 +520,12 @@ def update(
         if developer_mode == EnableDisableOptionsEnum.enable:
             bench.bench_config.developer_mode = True
             richprint.print("Enabling frappe developer mode.")
-            bench.common_bench_config_set({'developer_mode': bench.bench_config.developer_mode})
+            bench.set_common_bench_config({'developer_mode': bench.bench_config.developer_mode})
             richprint.print("Enabled frappe developer mode.")
         elif developer_mode == EnableDisableOptionsEnum.disable:
             bench.bench_config.developer_mode = False
             richprint.print("Disabling frappe developer mode.")
-            bench.common_bench_config_set({'developer_mode': bench.bench_config.developer_mode})
+            bench.set_common_bench_config({'developer_mode': bench.bench_config.developer_mode})
             richprint.print("Enabled frappe developer mode.")
 
         bench_config_save = True
@@ -640,7 +615,70 @@ def update(
             choices=['yes', 'no'],
         )
         if should_restart == 'yes':
-            bench.restart_frappe_server()
+            # bench.restart_frappe_server()
+            richprint.change_head("Restarting frappe server")
+            bench.restart_supervisor_service('frappe')
+            richprint.print("Restarted frappe server")
 
     if bench_config_save:
         bench.save_bench_config()
+
+
+@app.command()
+def reset(
+    ctx: typer.Context,
+    benchname: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Name of the bench.", autocompletion=sites_autocompletion_callback, callback=sitename_callback
+        ),
+    ] = None,
+    admin_pass: Annotated[
+        Optional[str],
+        typer.Option(help="Password for the 'Administrator' User."),
+    ] = None,
+):
+    """Reset bench site and reinstall all installed apps."""
+
+    services_manager = ctx.obj["services"]
+    verbose = ctx.obj['verbose']
+    bench = Bench.get_object(benchname, services_manager)
+    bench.reset(admin_pass)
+
+
+@app.command()
+def restart(
+    ctx: typer.Context,
+    benchname: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Name of the bench.", autocompletion=sites_autocompletion_callback, callback=sitename_callback
+        ),
+    ] = None,
+    web: Annotated[
+        bool,
+        typer.Option(help="Restart web service i.e socketio and frappe server."),
+    ] = True,
+    workers: Annotated[
+        bool,
+        typer.Option(help="Restart worker services i.e schedule and all workers."),
+    ] = True,
+    redis: Annotated[
+        bool,
+        typer.Option(help="Restart redis services."),
+    ] = False,
+):
+    """Restart bench services."""
+
+    services_manager = ctx.obj["services"]
+    verbose = ctx.obj['verbose']
+    bench = Bench.get_object(benchname, services_manager)
+
+    if web:
+        bench.restart_web_containers_services()
+
+    if workers:
+        bench.restart_workers_containers_services()
+
+    if redis:
+        bench.restart_redis_services_containers()

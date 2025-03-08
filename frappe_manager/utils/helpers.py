@@ -1,10 +1,12 @@
 import importlib
+import json
 from cryptography.hazmat.backends import default_backend
 from datetime import datetime
 from cryptography import x509
 from io import StringIO
 import sys
 from typing import Optional
+from frappe_manager.site_manager.site_exceptions import BenchException
 from frappe_manager.utils.docker import run_command_with_exit_code
 import requests
 import subprocess
@@ -120,6 +122,7 @@ def check_and_display_port_status(ports_to_check: list, exclude=[]):
             richprint.exit(
                 f"Ports {', '.join(map(str, already_binded))} {'are' if len(already_binded) > 1 else 'is'} currently in use. Please free up these ports."
             )
+
 
 def generate_random_text(length=50):
     """
@@ -388,14 +391,14 @@ def get_frappe_manager_own_files(file_path: str):
     return Path(str(pkg_resources.files("frappe_manager").joinpath(file_path)))
 
 
-def rich_traceback_to_string(traceback: Traceback) -> str:
+def rich_object_to_string(obj) -> str:
     """Convert a rich Traceback object to a string."""
 
     # Initialize a 'fake' console with StringIO to capture output
     capture_buffer = StringIO()
 
     fake_console = Console(force_terminal=False, file=capture_buffer)
-    fake_console.print(traceback, crop=False, overflow='ignore')
+    fake_console.print(obj, crop=False, overflow='ignore')
 
     captured_str = capture_buffer.getvalue()  # Retrieve the captured output as a string
     capture_buffer.close()
@@ -413,7 +416,7 @@ def capture_and_format_exception(traceback_max_frames: int = 100) -> str:
     )
 
     # Convert the Traceback object to a formatted string
-    formatted_traceback = rich_traceback_to_string(traceback)
+    formatted_traceback = rich_object_to_string(traceback)
 
     return formatted_traceback
 
@@ -446,3 +449,20 @@ def get_certificate_expiry_date(fullchain_path: Path) -> datetime:
     else:
         expiry_date: datetime = cert.not_valid_after
     return expiry_date
+
+
+def save_dict_to_file(config: dict, json_file_path: Path):
+    """
+    Sets the config value in the json_file_path file.
+
+    Args:
+        config (dict): A dictionary containing the key-value pairs.
+    """
+
+    final_config = {}
+    with open(json_file_path, "r") as f:
+        final_config = json.load(f)
+    for key, value in config.items():
+        final_config[key] = value
+    with open(json_file_path, "w") as f:
+        json.dump(final_config, f)
